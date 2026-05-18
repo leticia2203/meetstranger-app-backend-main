@@ -54,8 +54,8 @@ class Database {
   }
 
   async run(text, params) {
-    const result = await this.pool.query(text + ' RETURNING id', params);
-    return { id: result.rows[0]?.id };
+    const result = await this.pool.query(text, params);
+    return { changes: result.rowCount };
   }
 
   async close() {
