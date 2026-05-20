@@ -490,33 +490,68 @@ class WebSocketService {
   }
 
   // =========================
-  // HANDLE LEAVE ROOM
-  // =========================
+// HANDLE LEAVE ROOM
+// =========================
   handleLeaveRoom(
-    socket,
-    roomId = null,
-    isDisconnect = false
+  socket,
+  roomId = null,
+  isDisconnect = false
   ) {
 
-    const targetRoom =
-      roomId ||
-      socket.currentRoom;
+  const targetRoom =
+    roomId ||
+    socket.currentRoom;
 
-    if (!targetRoom) return;
+  // sem sala ativa
+  if (!targetRoom) {
 
     console.log(
-      '🚪 handleLeaveRoom:',
-      targetRoom
+      '⛔ No active room to leave'
     );
 
+    return;
+  }
+
+  console.log(
+    '🚪 handleLeaveRoom:',
+    targetRoom
+  );
+
+  // remove sala
+  const roomData =
     matchingService.leaveRoom(
       targetRoom,
       socket.userId
     );
 
-    socket.leave(targetRoom);
+  // notifica parceiro
+  if (roomData) {
 
-    socket.currentRoom = null;
+    console.log(
+      '📢 Notifying partner'
+    );
+
+    socket.to(targetRoom).emit(
+      'partner_left',
+      {
+        roomId: targetRoom,
+
+        message: isDisconnect
+          ? 'Parceiro desconectou'
+          : 'Parceiro saiu'
+      }
+    );
+  }
+
+  // remove socket da sala
+  socket.leave(targetRoom);
+
+  // limpa room atual
+  socket.currentRoom = null;
+
+  console.log(
+    '✅ Room cleaned successfully'
+  );
   }
 
   // =========================
