@@ -1,32 +1,46 @@
 const { Pool } = require('pg');
 
 class Database {
+
   constructor() {
     this.pool = null;
   }
 
   async connect() {
+
     try {
+
+      // FALLBACK LOCAL
+      const connectionString =
+        process.env.DATABASE_URL ||
+        'postgresql://postgres:postgres@localhost:5432/meetstranger';
+
       this.pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
-        ssl: {
-          rejectUnauthorized: false
-        }
+        connectionString,
+
+        ssl: process.env.DATABASE_URL
+          ? { rejectUnauthorized: false }
+          : false
       });
 
       // Test connection
       await this.pool.query('SELECT NOW()');
+
       console.log('💾 PostgreSQL connected successfully');
-      
+
       // Create tables
       await this.initTables();
+
     } catch (error) {
+
       console.error('❌ Database connection failed:', error);
+
       throw error;
     }
   }
 
   async initTables() {
+
     const createUsersTable = `
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -40,27 +54,40 @@ class Database {
     `;
 
     await this.pool.query(createUsersTable);
+
     console.log('✅ Tables created/verified');
   }
 
-  async query(text, params) {
+  async query(text, params = []) {
+
     const result = await this.pool.query(text, params);
+
     return result.rows;
   }
 
-  async get(text, params) {
+  async get(text, params = []) {
+
     const result = await this.pool.query(text, params);
+
     return result.rows[0] || null;
   }
 
-  async run(text, params) {
+  async run(text, params = []) {
+
     const result = await this.pool.query(text, params);
-    return { changes: result.rowCount };
+
+    return {
+      changes: result.rowCount,
+      rows: result.rows
+    };
   }
 
   async close() {
+
     if (this.pool) {
+
       await this.pool.end();
+
       console.log('💾 Database connection closed');
     }
   }
