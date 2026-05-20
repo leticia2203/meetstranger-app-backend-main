@@ -13,77 +13,99 @@ class MatchingService {
 
   joinQueue(userId, socketId, category) {
 
+  console.log(
+    `📥 joinQueue called: userId=${userId}, category=${category}`
+  );
+
+  // Remove usuário de todas as filas anteriores
+  this.leaveAllQueues(userId);
+
+  // Verifica categoria
+  const queue = waitingQueues[category];
+
+  if (!queue) {
+
+    console.log(`❌ Invalid category: ${category}`);
+
+    throw new Error('Invalid category');
+  }
+
+  console.log(
+    `📊 Current queue for ${category}:`,
+    queue.length,
+    'users waiting'
+  );
+
+  // Procura parceiro válido
+  const validPartnerIndex = queue.findIndex(
+    item =>
+      item.userId !== userId &&
+      item.socketId !== socketId
+  );
+
+  // Se encontrou parceiro válido
+  if (validPartnerIndex !== -1) {
+
+    const partner =
+      queue.splice(validPartnerIndex, 1)[0];
+
+    const roomId = uuidv4();
+
     console.log(
-      `📥 joinQueue called: userId=${userId}, category=${category}`
+      `🎯 Match found! Partner: ${partner.userId}, Room: ${roomId}`
     );
 
-    // Remove usuário de todas as filas anteriores
-    this.leaveAllQueues(userId);
+    // Cria sala
+    const room = {
 
-    // Verifica categoria
-    const queue = waitingQueues[category];
+      id: roomId,
 
-    if (!queue) {
+      category,
 
-      console.log(`❌ Invalid category: ${category}`);
+      user1Id: partner.userId,
+      user2Id: userId,
 
-      throw new Error('Invalid category');
-    }
+      user1SocketId: partner.socketId,
+      user2SocketId: socketId,
 
-    console.log(
-      `📊 Current queue for ${category}:`,
-      queue.length,
-      'users waiting'
+      status: 'active',
+
+      createdAt: new Date()
+    };
+
+    activeRooms.set(roomId, room);
+
+    console.log('🏠 Room created:', room);
+
+    return {
+
+      matched: true,
+
+      roomId,
+
+      category,
+
+      partnerId: partner.userId,
+      partnerSocketId: partner.socketId
+    };
+
+  } else {
+
+    // Verifica se usuário já está na fila
+    const alreadyInQueue = queue.some(
+      item =>
+        item.userId === userId ||
+        item.socketId === socketId
     );
 
-    // Se já existe alguém esperando
-    if (queue.length > 0) {
+    // Só adiciona se ainda não estiver
+    if (!alreadyInQueue) {
 
-      const partner = queue.shift();
-
-      const roomId = uuidv4();
-
-      console.log(
-        `🎯 Match found! Partner: ${partner.userId}, Room: ${roomId}`
-      );
-
-      // Cria sala
-      const room = {
-        id: roomId,
-        category,
-
-        user1Id: partner.userId,
-        user2Id: userId,
-
-        user1SocketId: partner.socketId,
-        user2SocketId: socketId,
-
-        status: 'active',
-
-        createdAt: new Date()
-      };
-
-      activeRooms.set(roomId, room);
-
-      console.log('🏠 Room created:', room);
-
-      return {
-        matched: true,
-
-        roomId,
-
-        category,
-
-        partnerId: partner.userId,
-        partnerSocketId: partner.socketId
-      };
-
-    } else {
-
-      // Adiciona na fila
       const queueItem = {
+
         userId,
         socketId,
+
         timestamp: Date.now()
       };
 
@@ -93,18 +115,27 @@ class MatchingService {
         `⏳ Added to queue. Position: ${queue.length}`
       );
 
-      return {
-        matched: false,
+    } else {
 
-        category,
+      console.log(
+        `⚠️ User already in queue`
+      );
+    }
 
-        queuePosition: queue.length,
+    return {
 
-        estimatedWait: this.calculateEstimatedWait(
+      matched: false,
+
+      category,
+
+      queuePosition: queue.length,
+
+      estimatedWait:
+        this.calculateEstimatedWait(
           queue.length
         )
-      };
-    }
+    };
+  }
   }
 
   leaveQueue(userId, category = null) {
