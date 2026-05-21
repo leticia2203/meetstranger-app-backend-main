@@ -9,6 +9,9 @@ const waitingQueues = {
 
 const activeRooms = new Map();
 
+// Salas pendentes: criadas quando há um par, mas aguardando que ambos chamem join-room
+const pendingRooms = new Map();
+
 class MatchingService {
 
   joinQueue(userId, socketId, category) {
@@ -52,39 +55,30 @@ class MatchingService {
     const roomId = uuidv4();
 
     console.log(
-      `🎯 Match found! Partner: ${partner.userId}, Room: ${roomId}`
+      `🎯 Match found (pending)! Partner: ${partner.userId}, Room: ${roomId}`
     );
 
-    // Cria sala
-    const room = {
-
+    // Cria sala pendente
+    const pending = {
       id: roomId,
-
       category,
-
       user1Id: partner.userId,
       user2Id: userId,
-
       user1SocketId: partner.socketId,
       user2SocketId: socketId,
-
-      status: 'active',
-
-      createdAt: new Date()
+      status: 'pending',
+      createdAt: new Date(),
+      joined: new Set() // usuários que já chamaram join-room
     };
 
-    activeRooms.set(roomId, room);
+    pendingRooms.set(roomId, pending);
 
-    console.log('🏠 Room created:', room);
+    console.log('🕐 Pending room created:', pending);
 
     return {
-
       matched: true,
-
       roomId,
-
       category,
-
       partnerId: partner.userId,
       partnerSocketId: partner.socketId
     };
@@ -181,65 +175,126 @@ class MatchingService {
 
   getRoom(roomId) {
 
-    return activeRooms.get(roomId);
+    // check active first
+    if (activeRooms.has(roomId)) return activeRooms.get(roomId);
+
+    // then pending
+    if (pendingRooms.has(roomId)) return pendingRooms.get(roomId);
+
+    return undefined;
   }
 
   getUserRoom(userId) {
 
-    return Array.from(activeRooms.values()).find(
-      room =>
-        room.user1Id === userId ||
-        room.user2Id === userId
+    // search both active and pending
+    const active = Array.from(activeRooms.values()).find(
+      room => room.user1Id === userId || room.user2Id === userId
+    );
+
+    if (active) return active;
+
+    return Array.from(pendingRooms.values()).find(
+      room => room.user1Id === userId || room.user2Id === userId
     );
   }
 
   // MÉTODO QUE ESTAVA FALTANDO
   getUserRooms(userId) {
 
-    return Array.from(activeRooms.values()).filter(
-      room =>
-        room.user1Id === userId ||
-        room.user2Id === userId
+    const rooms = Array.from(activeRooms.values()).filter(
+      room => room.user1Id === userId || room.user2Id === userId
     );
+
+    const pending = Array.from(pendingRooms.values()).filter(
+      room => room.user1Id === userId || room.user2Id === userId
+    );
+
+    return rooms.concat(pending);
   }
 
   leaveRoom(roomId, userId) {
 
+    // try active rooms first
     const room = activeRooms.get(roomId);
 
     if (room) {
-
-      // Remove sala
       activeRooms.delete(roomId);
 
-      // Descobre parceiro
-      const partnerId =
-        room.user1Id === userId
-          ? room.user2Id
-          : room.user1Id;
+      const partnerId = room.user1Id === userId ? room.user2Id : room.user1Id;
 
       const partnerSocketId =
-        room.user1Id === userId
-          ? room.user2SocketId
-          : room.user1SocketId;
+        room.user1Id === userId ? room.user2SocketId : room.user1SocketId;
 
-      console.log(
-        `🚪 Room ${roomId} ended by user ${userId}`
-      );
+      console.log(`🚪 Room ${roomId} ended by user ${userId}`);
 
       return {
         ...room,
-
         partnerId,
         partnerSocketId,
-
         status: 'ended',
+        endedAt: new Date()
+      };
+    }
 
+    // if pending, remove and return ended
+    const pending = pendingRooms.get(roomId);
+
+    if (pending) {
+      pendingRooms.delete(roomId);
+
+      const partnerId = pending.user1Id === userId ? pending.user2Id : pending.user1Id;
+
+      const partnerSocketId =
+        pending.user1Id === userId ? pending.user2SocketId : pending.user1SocketId;
+
+      console.log(`🚪 Pending room ${roomId} cancelled by user ${userId}`);
+
+      return {
+        ...pending,
+        partnerId,
+        partnerSocketId,
+        status: 'cancelled',
         endedAt: new Date()
       };
     }
 
     return null;
+  }
+
+  // marca que um usuário chamou join-room para uma pending room
+  markUserJoined(roomId, userId) {
+    const pending = pendingRooms.get(roomId);
+
+    if (!pending) return { finalized: false };
+
+    pending.joined.add(userId);
+
+    // se ambos chamaram join, finalize
+    if (pending.joined.has(pending.user1Id) && pending.joined.has(pending.user2Id)) {
+      // move to active
+      const room = {
+        id: pending.id,
+        category: pending.category,
+        user1Id: pending.user1Id,
+        user2Id: pending.user2Id,
+        user1SocketId: pending.user1SocketId,
+        user2SocketId: pending.user2SocketId,
+        status: 'active',
+        createdAt: pending.createdAt
+      };
+
+      pendingRooms.delete(roomId);
+
+      activeRooms.set(roomId, room);
+
+      return { finalized: true, room };
+    }
+
+    return { finalized: false };
+  }
+
+  getPendingRoom(roomId) {
+    return pendingRooms.get(roomId);
   }
 
   calculateEstimatedWait(queuePosition) {
@@ -282,7 +337,7 @@ class MatchingService {
     const maxInactiveTime =
       5 * 60 * 1000; // 5 minutos
 
-    for (const [roomId, room] of activeRooms.entries()) {
+  for (const [roomId, room] of activeRooms.entries()) {
 
       if (
         now - room.createdAt.getTime() >
@@ -294,6 +349,17 @@ class MatchingService {
         );
 
         activeRooms.delete(roomId);
+      }
+    }
+
+    // cleanup stale pending rooms (no finalization in 2 minutes)
+    const now2 = Date.now();
+    const maxPendingAge = 2 * 60 * 1000; // 2 minutes
+
+    for (const [roomId, room] of pendingRooms.entries()) {
+      if (now2 - room.createdAt.getTime() > maxPendingAge) {
+        console.log(`🧹 Removing stale pending room: ${roomId}`);
+        pendingRooms.delete(roomId);
       }
     }
   }

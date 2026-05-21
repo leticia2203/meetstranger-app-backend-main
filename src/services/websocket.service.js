@@ -356,85 +356,45 @@ class WebSocketService {
                   data.roomId
               }
             );
-
-            // Notify partner (if present) that a user joined
+            // mark this user as joined in pending room
             try {
-              const roomData =
-                matchingService.getRoom(
-                  data.roomId
-                );
+              const mark = matchingService.markUserJoined(
+                data.roomId,
+                socket.userId
+              );
 
-              if (roomData) {
+              // if marking finalized the room, notify both users
+              if (mark && mark.finalized) {
+                const finalizedRoom = mark.room;
 
-                const partnerId =
-                  roomData.user1Id === socket.userId
-                    ? roomData.user2Id
-                    : roomData.user1Id;
+                // retrieve sockets
+                const socket1 = this.io.sockets.sockets.get(finalizedRoom.user1SocketId);
+                const socket2 = this.io.sockets.sockets.get(finalizedRoom.user2SocketId);
 
-                const partnerSocketId =
-                  roomData.user1Id === socket.userId
-                    ? roomData.user2SocketId
-                    : roomData.user1SocketId;
+                const user1 = await authService.getUserById(finalizedRoom.user1Id);
+                const user2 = await authService.getUserById(finalizedRoom.user2Id);
 
-                const partnerSocket =
-                  this.io.sockets.sockets.get(
-                    partnerSocketId
-                  );
-
-                const selfUser =
-                  await authService.getUserById(
-                    socket.userId
-                  );
-
-                // If partner socket exists and is already in the room, notify both
-                if (
-                  partnerSocket &&
-                  partnerSocket.currentRoom === data.roomId
-                ) {
-
-                  const partnerUser =
-                    await authService.getUserById(
-                      partnerId
-                    );
-
-                  // notify joining socket about partner
-                  socket.emit(
-                    'user-joined',
-                    {
-                      roomId: data.roomId,
-                      partner: {
-                        username:
-                          partnerUser?.username ||
-                          'Usuário'
-                      }
-                    }
-                  );
-
-                  // notify partner that this socket joined
-                  partnerSocket.emit(
-                    'user-joined',
-                    {
-                      roomId: data.roomId,
-                      partner: {
-                        username:
-                          selfUser?.username ||
-                          'Usuário'
-                      }
-                    }
-                  );
-
-                } else {
-                  // partner not yet joined: inform this socket to wait
-                  socket.emit(
-                    'waiting-for-partner',
-                    {
-                      roomId: data.roomId
-                    }
-                  );
+                // emit user-joined to both
+                if (socket1) {
+                  socket1.emit('user-joined', {
+                    roomId: finalizedRoom.id,
+                    partner: { username: user2?.username || 'Usuário' }
+                  });
                 }
+
+                if (socket2) {
+                  socket2.emit('user-joined', {
+                    roomId: finalizedRoom.id,
+                    partner: { username: user1?.username || 'Usuário' }
+                  });
+                }
+              } else {
+                // still waiting for partner to call join
+                socket.emit('waiting-for-partner', { roomId: data.roomId });
               }
             } catch (err) {
-              console.error('❌ Error in join-room notify:', err);
+              console.error('❌ Error marking joined:', err);
+              socket.emit('error', { message: 'Could not join room' });
             }
           }
         }
